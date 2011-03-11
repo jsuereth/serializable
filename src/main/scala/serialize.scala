@@ -1,19 +1,16 @@
 package serialize
 
-import tools.nsc.util.ScalaClassLoader
+import scala.tools.nsc.interpreter.AbstractFileClassLoader
+import scala.tools.nsc.io.VirtualDirectory
 import java.io.{ObjectStreamClass, ObjectInputStream, ObjectOutputStream, IOException}
 
 class InterpreterObjectOutputStream(delegate : ObjectOutputStream) extends ObjectOutputStream(delegate) {
   // TODO(joshuasuereth): Is this necessary?
-  lazy val classLoaderClass : Option[Class[_]] = try {
-      Some(Class.forName("scala.tools.nsc.interpreter.AbstractFileClassLoader"))
-  } catch {
-    case ex : ClassNotFoundException => None
-  }
+  lazy val classLoaderClass = classOf[AbstractFileClassLoader]
   private def isReplClassLoader(cl : ClassLoader) = {
     if (cl == null || cl.getClass == null) false
     else if (cl.getClass.getName == "scala.tools.nsc.interpreter.AbstractFileClassLoader") true
-    else classLoaderClass.map(_.isAssignableFrom(cl.getClass)) getOrElse false
+    else classLoaderClass.isAssignableFrom(cl.getClass)
   }
   @throws(classOf[IOException])
   override protected def annotateClass(cl : Class[_]) : Unit = {
@@ -21,11 +18,23 @@ class InterpreterObjectOutputStream(delegate : ObjectOutputStream) extends Objec
     // Mark whether we had to serialize the class.
     writeBoolean(extramagic)
     if (extramagic) {
-      val cll = cl.getClassLoader.asInstanceOf[ScalaClassLoader]
-      // TODO(joshuasuereth): Figure out why this isn't working.
-      val bytes = cll.findBytesForClassName(cl.getCanonicalName)
+      val cll = cl.getClassLoader.asInstanceOf[AbstractFileClassLoader]
+
+      // TODO(joshuasuereth): Find a less hacky solution.
+      val bytes = {
+        val tmp = cll.findBytesForClassName(cl.getName)
+        if (tmp.length == 0) {
+          val tmp = cll.getClass.getDeclaredField("root")
+          tmp.setAccessible(true)
+          val dir = tmp.get(cll).asInstanceOf[VirtualDirectory]
+          val fileName = cl.getName + ".class"
+          val result = dir.iterator.find(_.name == fileName)
+          Console.println("Found result: " + result)
+          result.get.toByteArray
+        } else tmp
+      }
       Console.println("Serializing " + cl.getName + " with size = " + bytes.length + " from cl " + cll)
-      if (bytes.length == 0) throw new IOException("Could not find REPL class for: " + cl.getCanonicalName)
+      if (bytes.length == 0) throw new IOException("Could not find REPL class for: " + cl.getName)
       writeInt(bytes.length)
       write(bytes)
     }
@@ -36,11 +45,13 @@ class SingleClassLoader(parent : ClassLoader, className : String, bytes : Array[
   @throws(classOf[ClassNotFoundException])
   override protected def findClass(name : String ) : Class[_] = if (name == className) {
     defineClass(name, bytes, 0, bytes.length)
-  } else super.findClass(name)
+  } else null
   @throws(classOf[ClassNotFoundException])
   override def loadClass(name : String) : Class[_] = {
-    val cl = findLoadedClass(name)
-    if (cl == null) findClass(name) else cl
+    var cl = findLoadedClass(name)
+    if (cl == null) cl = findClass(name)
+    if (cl == null) cl = parent.loadClass(name)
+    cl
   }
 }
 
