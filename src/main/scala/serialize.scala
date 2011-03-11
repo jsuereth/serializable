@@ -5,7 +5,6 @@ import scala.tools.nsc.io.VirtualDirectory
 import java.io.{ObjectStreamClass, ObjectInputStream, ObjectOutputStream, IOException}
 
 class InterpreterObjectOutputStream(delegate : ObjectOutputStream) extends ObjectOutputStream(delegate) {
-  // TODO(joshuasuereth): Is this necessary?
   lazy val classLoaderClass = classOf[AbstractFileClassLoader]
   private def isReplClassLoader(cl : ClassLoader) = {
     if (cl == null || cl.getClass == null) false
